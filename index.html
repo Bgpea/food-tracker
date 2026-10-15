@@ -262,7 +262,7 @@
   .c-muted{ color:var(--muted); }
 
   /* ===== Diary totals ===== */
-  #macroChart{ margin:10px auto 0 !important; }
+  #macroChart{ margin:10px auto 8px !important; }
   .day-grid .tgt{ color:var(--muted); }
   .lbl-btn{ background:none; border:0; padding:0; text-align:left; font-size:13px; color:var(--muted); cursor:pointer; }
   .v{ position:relative; display:inline-block; }
@@ -343,10 +343,10 @@
       </div>
 
       <div id="chartWrap">
+        <canvas id="macroChart"></canvas>
         <div id="dayTotals" class="day-grid"></div>
         <div id="targetNote" class="target-note"></div>
         <div id="extraTotals" class="totals line"></div>
-        <canvas id="macroChart"></canvas>
       </div>
 
       <div id="mealsContainer"></div>
@@ -593,9 +593,11 @@ function openAddMealModal(){
 
 /* ===== Macro helpers ===== */
 function sumMacros(list){
-  const t = { calories:0, protein:0, carbs:0, fat:0 };
+  const t = { calories:0, protein:0, carbs:0, fat:0, fibers:0, cost:0 };
   (list || []).forEach(f => {
     const k = (+f.quantity || 0) / 100;
+    t.fibers   += (+f.fibers   || 0) * k;
+    t.cost     += (+f.cost     || 0) * k / 10;
     t.calories += (+f.calories || 0) * k;
     t.protein  += (+f.protein  || 0) * k;
     t.carbs    += (+f.carbs    || 0) * k;
@@ -607,11 +609,15 @@ function fmtMacros(t){
   return `${Math.round(t.calories)} kcal · P ${Math.round(t.protein)}g · C ${Math.round(t.carbs)}g · F ${Math.round(t.fat)}g`;
 }
 
-function fmtMacrosHtml(t){
-  return `<span class="c-cal">${Math.round(t.calories)} kcal</span> · ` +
-         `<span class="c-p">P ${Math.round(t.protein)}g</span> · ` +
-         `<span class="c-c">C ${Math.round(t.carbs)}g</span> · ` +
-         `<span class="c-f">F ${Math.round(t.fat)}g</span>`;
+function fmtMacrosHtml(t, withExtras){
+  let out = `<span class="c-cal">${Math.round(t.calories)} kcal</span> · ` +
+            `<span class="c-p">P ${Math.round(t.protein)}g</span> · ` +
+            `<span class="c-c">C ${Math.round(t.carbs)}g</span> · ` +
+            `<span class="c-f">F ${Math.round(t.fat)}g</span>`;
+  if(withExtras){   // fibers and cost, in gray
+    out += ` · <span class="c-muted">Fib ${t.fibers.toFixed(0)}g</span> · <span class="c-muted">${t.cost.toFixed(2)} €</span>`;
+  }
+  return out;
 }
 
 /* ===== Generic modal. buttons: [{text, bg, onClick(close)}]; onClick may return false to keep it open ===== */
@@ -714,7 +720,7 @@ function renderMeals(){
 
     // partial totals shown above the meal name
     const statsEl = document.createElement('div'); statsEl.className = 'meal-stats';
-    statsEl.innerHTML = fmtMacrosHtml(sumMacros(meals[mealName]));
+    statsEl.innerHTML = fmtMacrosHtml(sumMacros(meals[mealName]), true);
     box.appendChild(statsEl);
 
     // header
@@ -743,7 +749,7 @@ function renderMeals(){
         if(v <= 0){ e.target.value = entry.quantity; return; }
         mealsDB[date][mealName][idx].quantity = v;
         saveMealsDB();
-        statsEl.innerHTML = fmtMacrosHtml(sumMacros(mealsDB[date][mealName]));
+        statsEl.innerHTML = fmtMacrosHtml(sumMacros(mealsDB[date][mealName]), true);
         renderTotalsAndChart();
       });
       left.appendChild(qtyInput);
@@ -917,32 +923,23 @@ function renderTotalsAndChart(){
       totals.ammino += (f.protein || 0) * fac * (f.ammino || 0);
     });
   });
-  // Rows: Target, Logged, Diff (logged minus target). Only the calories keep the small ↑ / ↓ arrow.
+  // Rows: Target and Logged (both in the macro colours), then the difference (logged minus target) in gray
   const tg = getTargetForDate(date);
   const hasMacros = tg.protein != null;
   const rd = Math.round;
-  const cell = (logged, target, cls, unit, withArrow) => {
-    let arrow = '';
-    if(withArrow && target != null){
-      if(rd(logged) < rd(target)) arrow = '↑';
-      else if(rd(logged) > rd(target)) arrow = '↓';
-    }
-    return `<span class="${cls}"><span class="v">${arrow ? `<em class="arr">${arrow}</em>` : ''}${rd(logged)}${unit}</span></span>`;
-  };
-  const tcell = (v, unit) => `<span class="tgt">${v == null ? '—' : rd(v) + unit}</span>`;
+  const cell = (v, cls, unit) => `<span class="${cls}">${v == null ? '—' : rd(v) + unit}</span>`;
   const dcell = (logged, target, unit) => {
     if(target == null) return '<span class="tgt">—</span>';
     const d = rd(logged) - rd(target);
-    const color = d < 0 ? '#ff6b6b' : (d > 0 ? '#8fd18f' : '#ffca28');   // red / green / yellow
-    return `<span style="color:${color}">${d > 0 ? '+' : ''}${d}${unit}</span>`;
+    return `<span class="tgt">${d > 0 ? '+' : ''}${d}${unit}</span>`;
   };
   byId('dayTotals').innerHTML = `
     <span></span><b class="c-cal">kcal</b><b class="c-p">Protein</b><b class="c-c">Carbs</b><b class="c-f">Fat</b>
     <button class="lbl-btn" onclick="editDayTarget()" title="Change this day's target">Target ✎</button>
-    ${tcell(tg.calories, '')}${tcell(hasMacros ? tg.protein : null, 'g')}${tcell(hasMacros ? tg.carbs : null, 'g')}${tcell(hasMacros ? tg.fat : null, 'g')}
+    ${cell(tg.calories, 'c-cal', '')}${cell(hasMacros ? tg.protein : null, 'c-p', 'g')}${cell(hasMacros ? tg.carbs : null, 'c-c', 'g')}${cell(hasMacros ? tg.fat : null, 'c-f', 'g')}
     <span class="lbl">Logged</span>
-    ${cell(totals.calories, tg.calories, 'c-cal', '', true)}${cell(totals.protein, null, 'c-p', 'g', false)}${cell(totals.carbs, null, 'c-c', 'g', false)}${cell(totals.fat, null, 'c-f', 'g', false)}
-    <span class="lbl">Diff</span>
+    ${cell(totals.calories, 'c-cal', '')}${cell(totals.protein, 'c-p', 'g')}${cell(totals.carbs, 'c-c', 'g')}${cell(totals.fat, 'c-f', 'g')}
+    <span></span>
     ${dcell(totals.calories, tg.calories, '')}${dcell(totals.protein, hasMacros ? tg.protein : null, 'g')}${dcell(totals.carbs, hasMacros ? tg.carbs : null, 'g')}${dcell(totals.fat, hasMacros ? tg.fat : null, 'g')}`;
   byId('targetNote').textContent = tg.override ? 'Custom target for this day' : '';
 
