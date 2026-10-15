@@ -260,6 +260,8 @@
   .c-c{ color:var(--accent2); }
   .c-f{ color:var(--accent3); }
   .c-muted{ color:var(--muted); }
+  .sep{ display:inline-block; width:.9em; }
+  .macro-grid + .macro-grid{ margin-top:-4px; }
 
   /* ===== Diary totals ===== */
   #macroChart{ margin:10px auto 8px !important; }
@@ -570,7 +572,7 @@ function openAddMealModal(){
       const b = document.createElement('button'); b.className = 'am-item';
       b.textContent = meal.name;
       const sub = document.createElement('small');
-      sub.innerHTML = meal.foods.length ? fmtMacrosHtml(sumMacros(meal.foods)) : 'Empty meal';
+      sub.innerHTML = meal.foods.length ? fmtMacrosHtml(sumMacros(meal.foods)) : 'Default meal';
       b.appendChild(sub);
       b.addEventListener('click', () => { modal.close(); addMealToDay(meal.name, meal.foods); });
       list.appendChild(b);
@@ -606,16 +608,19 @@ function sumMacros(list){
   return t;
 }
 function fmtMacros(t){
-  return `${Math.round(t.calories)} kcal · P ${Math.round(t.protein)}g · C ${Math.round(t.carbs)}g · F ${Math.round(t.fat)}g`;
+  return [`${Math.round(t.calories)} kcal`, `P ${Math.round(t.protein)}g`, `C ${Math.round(t.carbs)}g`, `F ${Math.round(t.fat)}g`].join(SEP_TXT);
 }
 
+const SEP = '<span class="sep"></span>';          // gap between values (HTML)
+const SEP_TXT = '\u2002\u2002';                   // gap between values (plain text)
+
 function fmtMacrosHtml(t, withExtras){
-  let out = `<span class="c-cal">${Math.round(t.calories)} kcal</span> · ` +
-            `<span class="c-p">P ${Math.round(t.protein)}g</span> · ` +
-            `<span class="c-c">C ${Math.round(t.carbs)}g</span> · ` +
+  let out = `<span class="c-cal">${Math.round(t.calories)} kcal</span>${SEP}` +
+            `<span class="c-p">P ${Math.round(t.protein)}g</span>${SEP}` +
+            `<span class="c-c">C ${Math.round(t.carbs)}g</span>${SEP}` +
             `<span class="c-f">F ${Math.round(t.fat)}g</span>`;
   if(withExtras){   // fibers and cost, in gray
-    out += ` · <span class="c-muted">Fib ${t.fibers.toFixed(0)}g</span> · <span class="c-muted">${t.cost.toFixed(2)} €</span>`;
+    out += `${SEP}<span class="c-muted">Fib ${t.fibers.toFixed(0)}g</span>${SEP}<span class="c-muted">${t.cost.toFixed(2)} €</span>`;
   }
   return out;
 }
@@ -949,8 +954,8 @@ function renderTotalsAndChart(){
   if(totals.ammino < 0 && amt > 0){ suggestion = `add lisin: ${amt}g`; sugColor = '#ff6b6b'; }
   else if(totals.ammino > 0 && amt > 0){ suggestion = `add metionine: ${amt}g`; sugColor = '#ff6b6b'; }
   byId('extraTotals').innerHTML =
-    `<span class="c-muted">Fib: ${totals.fibers.toFixed(0)}g</span> · ` +
-    `<span class="c-muted">Cost: ${totals.cost.toFixed(2)} €</span> · ` +
+    `<span class="c-muted">Fib: ${totals.fibers.toFixed(0)}g</span>${SEP}` +
+    `<span class="c-muted">Cost: ${totals.cost.toFixed(2)} €</span>${SEP}` +
     `<span style="color:${sugColor}">${suggestion}</span>`;
 
   // chart (Protein, Carbs, Fat)
@@ -984,14 +989,17 @@ function renderSavedMealsEditor(){
   }
 
   let shown = 0;
-  savedMealsDB.forEach((meal, idx) => {
+  // meals with foods first, default (no foods) meals at the bottom; idx stays the real position
+  const items = savedMealsDB.map((meal, idx) => ({ meal, idx }));
+  const ordered = items.filter(x => x.meal.foods.length > 0).concat(items.filter(x => x.meal.foods.length === 0));
+  ordered.forEach(({ meal, idx }) => {
     if(query && !meal.name.toLowerCase().includes(query)) return;
     shown++;
     const btn = document.createElement('button'); btn.className = 'nav-card';
     const text = document.createElement('span'); text.className = 'nav-text';
     const b = document.createElement('b'); b.textContent = meal.name;
     const small = document.createElement('small');
-    small.innerHTML = meal.foods.length ? fmtMacrosHtml(sumMacros(meal.foods)) : 'Empty meal';
+    small.innerHTML = meal.foods.length ? fmtMacrosHtml(sumMacros(meal.foods)) : 'Default meal';
     text.append(b, small);
     const chev = document.createElement('span'); chev.className = 'nav-chev'; chev.textContent = '›';
     btn.append(text, chev);
@@ -1024,6 +1032,10 @@ function showSavedMealDetail(idx){
       <div><b id="sm_p" class="c-p">0</b><small>protein g</small></div>
       <div><b id="sm_c" class="c-c">0</b><small>carbs g</small></div>
       <div><b id="sm_f" class="c-f">0</b><small>fat g</small></div>
+    </div>
+    <div class="macro-grid" style="grid-template-columns:repeat(2,1fr)">
+      <div><b id="sm_fib" class="c-muted">0</b><small>fibers g</small></div>
+      <div><b id="sm_cost" class="c-muted">0.00</b><small>cost €</small></div>
     </div>
     <div id="savedMealFoods"></div>
     <div class="add-row">
@@ -1069,6 +1081,8 @@ function updateDraftStats(){
   byId('sm_p').textContent = Math.round(t.protein);
   byId('sm_c').textContent = Math.round(t.carbs);
   byId('sm_f').textContent = Math.round(t.fat);
+  byId('sm_fib').textContent = Math.round(t.fibers);
+  byId('sm_cost').textContent = t.cost.toFixed(2);
 }
 
 function renderDraftFoods(){
@@ -1076,7 +1090,7 @@ function renderDraftFoods(){
   wrap.innerHTML = '';
   const draft = editingMeal.draft;
   if(draft.length === 0){
-    wrap.innerHTML = '<div class="hint">No foods yet. Search below to add one, or save it empty.</div>';
+    wrap.innerHTML = '<div class="hint">No foods yet. Search below to add one, or save it without foods as a default meal.</div>';
     return;
   }
   draft.forEach((food, i) => {
@@ -1431,13 +1445,13 @@ function editDayTarget(){
     dayTargets[date] = entry;
     persistDayTargets(); renderAll();
   }});
-  openModal('Target · ' + label, wrap, buttons);
+  openModal('Target: ' + label, wrap, buttons);
 }
 
 function macrosToKcal(p, c, f){ return p*4 + c*4 + f*9; }
 function fmtTarget(t){
   let out = `${Math.round(t.calories)} kcal`;
-  if(t.protein != null) out += ` · P ${Math.round(t.protein)}g · C ${Math.round(t.carbs)}g · F ${Math.round(t.fat)}g`;
+  if(t.protein != null) out += `${SEP_TXT}P ${Math.round(t.protein)}g${SEP_TXT}C ${Math.round(t.carbs)}g${SEP_TXT}F ${Math.round(t.fat)}g`;
   return out;
 }
 function parseDay(str){ return new Date(str + 'T12:00:00'); }
@@ -1676,7 +1690,7 @@ function renderCalorieReport(){
     const val = document.createElement('span'); val.className = 'rep-day';
     val.innerHTML = empty
       ? '<span style="color:#666">—</span>'
-      : `<b class="c-cal">${Math.round(m.calories)} kcal</b><small><span class="c-p">P ${Math.round(m.protein)}g</span> · <span class="c-c">C ${Math.round(m.carbs)}g</span> · <span class="c-f">F ${Math.round(m.fat)}g</span></small>`;
+      : `<b class="c-cal">${Math.round(m.calories)} kcal</b><small><span class="c-p">P ${Math.round(m.protein)}g</span>${SEP}<span class="c-c">C ${Math.round(m.carbs)}g</span>${SEP}<span class="c-f">F ${Math.round(m.fat)}g</span></small>`;
     row.append(day, val);
     rowsEl.appendChild(row);
   });
