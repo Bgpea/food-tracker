@@ -1,4 +1,4 @@
-const CACHE = 'food-tracker-v8';
+const CACHE = 'food-tracker-v9';
 const LOCAL = ['./', './index.html', './manifest.json',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png'];
 const CHARTJS = 'https://cdn.jsdelivr.net/npm/chart.js';
