@@ -217,7 +217,9 @@
 
 
   /* ===== Meal partial totals / modal / saved meal editor ===== */
-  .meal-stats{ font-size:12px; color:#cfcfcf; margin-bottom:4px; }
+  .meal-stats{ font-size:11.5px; color:#cfcfcf; margin:6px 0 8px; }
+  .meal-stats span{ white-space:nowrap; }
+  .meal-stats .sep{ width:.65em; }
   .modal-backdrop{ position:fixed; inset:0; background:rgba(0,0,0,.65); z-index:300; display:flex; align-items:center; justify-content:center; padding:16px; }
   .modal{ max-height:88vh; overflow:auto; width:100%; max-width:320px; background:#1b1b1b; border:1px solid #333; border-radius:12px; padding:14px; box-shadow:0 10px 30px rgba(0,0,0,.7); }
   .modal h3{ margin:0 0 10px; font-size:16px; }
@@ -240,9 +242,9 @@
   .tgt-total{ font-size:13px; text-align:right; margin-top:4px; color:#cfcfcf; }
   .report-nav{ display:flex; gap:6px; align-items:center; margin-bottom:10px; }
   .report-nav .lbl{ flex:1; text-align:center; font-size:13px; color:#fff; }
-  .rep-grid{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px 8px; font-size:13px; margin-bottom:10px; }
-  .rep-grid b{ color:#fff; }
-  .rep-grid span:nth-child(3n+2), .rep-grid b:nth-child(3n+2), .rep-grid span:nth-child(3n), .rep-grid b:nth-child(3n){ text-align:right; }
+  .rep-grid{ display:grid; grid-template-columns:56px 1fr 1fr 1fr; gap:6px 8px; font-size:13px; margin-bottom:10px; }
+  .rep-grid b{ color:var(--muted); font-weight:normal; }
+  .rep-grid > *:not(:nth-child(4n+1)){ text-align:right; }
   .rep-day{ display:flex; flex-direction:column; align-items:flex-end; gap:2px; }
   .rep-day small{ color:var(--muted); font-size:11px; }
 
@@ -250,7 +252,7 @@
   /* ===== Diary totals grid ===== */
   .day-grid{ display:grid; grid-template-columns:64px repeat(4,1fr); gap:4px 6px; font-size:13px; text-align:center; margin-top:8px; }
   .day-grid b{ font-size:11px; font-weight:normal; }
-  .day-grid .lbl{ text-align:left; color:#cfcfcf; }
+  .day-grid .lbl{ text-align:left; color:var(--muted); }
   .day-grid .tgt{ color:#9ad07a; }
 
 
@@ -285,7 +287,7 @@
   .set-h{ font-size:15px; margin:14px 0 0; }
   .set-row{ display:flex; gap:8px; }
   .set-row button{ flex:1; }
-  .rep-grid .mut{ color:#cfcfcf; }
+  .rep-grid .mut{ color:var(--muted); }
   .rep-grid .tgt{ color:var(--muted); }
 
   @media (max-width:420px){
@@ -611,6 +613,21 @@ function fmtMacros(t){
   return [`${Math.round(t.calories)} kcal`, `P ${Math.round(t.protein)}g`, `C ${Math.round(t.carbs)}g`, `F ${Math.round(t.fat)}g`].join(SEP_TXT);
 }
 
+/* Pie-chart colours, with a pale and a dark version used for the deltas */
+const BASE_COLOR = { protein:'#42a5f5', carbs:'#ffca28', fat:'#ef5350' };
+const PALE_COLOR = { protein:'#aad6fb', carbs:'#ffe79e', fat:'#f8b2b0' };
+const DARK_COLOR = { protein:'#2e74ab', carbs:'#b28d1c', fat:'#a73a38' };
+/* delta colour: calories white; macros pale when negative, dark when positive, normal colour at exactly zero */
+function deltaColor(kind, d){
+  if(kind === 'calories') return '#ffffff';
+  return d < 0 ? PALE_COLOR[kind] : (d > 0 ? DARK_COLOR[kind] : BASE_COLOR[kind]);
+}
+function deltaHtml(kind, logged, target, unit){
+  if(target == null) return '<span class="tgt">—</span>';
+  const d = Math.round(logged) - Math.round(target);
+  return `<span style="color:${deltaColor(kind, d)}">${d > 0 ? '+' : ''}${d}${unit}</span>`;
+}
+
 const SEP = '<span class="sep"></span>';          // gap between values (HTML)
 const SEP_TXT = '\u2002\u2002';                   // gap between values (plain text)
 
@@ -723,11 +740,6 @@ function renderMeals(){
   Object.keys(meals).forEach(mealName => {
     const box = document.createElement('div'); box.className='meal-box';
 
-    // partial totals shown above the meal name
-    const statsEl = document.createElement('div'); statsEl.className = 'meal-stats';
-    statsEl.innerHTML = fmtMacrosHtml(sumMacros(meals[mealName]), true);
-    box.appendChild(statsEl);
-
     // header
     const header = document.createElement('div'); header.className='meal-header';
     const nameEl = document.createElement('strong'); nameEl.style.fontSize = '15px'; nameEl.style.minWidth = '0';
@@ -738,6 +750,11 @@ function renderMeals(){
       <button onclick="deleteMeal('${escapeJs(mealName)}')" class="small-btn" style="background-color: #5a1a1a">Delete</button>`;
     header.append(nameEl, btns);
     box.appendChild(header);
+
+    // partial totals, under the meal name and the Save / Delete buttons
+    const statsEl = document.createElement('div'); statsEl.className = 'meal-stats';
+    statsEl.innerHTML = fmtMacrosHtml(sumMacros(meals[mealName]), true);
+    box.appendChild(statsEl);
     // logged foods (single rows)
     const list = (meals[mealName] || []);
     list.forEach((entry, idx) => {
@@ -928,16 +945,11 @@ function renderTotalsAndChart(){
       totals.ammino += (f.protein || 0) * fac * (f.ammino || 0);
     });
   });
-  // Rows: Target and Logged (both in the macro colours), then the difference (logged minus target) in gray
+  // Rows: Target and Logged (macro colours), then the delta (logged minus target)
   const tg = getTargetForDate(date);
   const hasMacros = tg.protein != null;
   const rd = Math.round;
   const cell = (v, cls, unit) => `<span class="${cls}">${v == null ? '—' : rd(v) + unit}</span>`;
-  const dcell = (logged, target, unit) => {
-    if(target == null) return '<span class="tgt">—</span>';
-    const d = rd(logged) - rd(target);
-    return `<span class="tgt">${d > 0 ? '+' : ''}${d}${unit}</span>`;
-  };
   byId('dayTotals').innerHTML = `
     <span></span><b class="c-cal">kcal</b><b class="c-p">Protein</b><b class="c-c">Carbs</b><b class="c-f">Fat</b>
     <button class="lbl-btn" onclick="editDayTarget()" title="Change this day's target">Target ✎</button>
@@ -945,7 +957,7 @@ function renderTotalsAndChart(){
     <span class="lbl">Logged</span>
     ${cell(totals.calories, 'c-cal', '')}${cell(totals.protein, 'c-p', 'g')}${cell(totals.carbs, 'c-c', 'g')}${cell(totals.fat, 'c-f', 'g')}
     <span></span>
-    ${dcell(totals.calories, tg.calories, '')}${dcell(totals.protein, hasMacros ? tg.protein : null, 'g')}${dcell(totals.carbs, hasMacros ? tg.carbs : null, 'g')}${dcell(totals.fat, hasMacros ? tg.fat : null, 'g')}`;
+    ${deltaHtml('calories', totals.calories, tg.calories, '')}${deltaHtml('protein', totals.protein, hasMacros ? tg.protein : null, 'g')}${deltaHtml('carbs', totals.carbs, hasMacros ? tg.carbs : null, 'g')}${deltaHtml('fat', totals.fat, hasMacros ? tg.fat : null, 'g')}`;
   byId('targetNote').textContent = tg.override ? 'Custom target for this day' : '';
 
   // row 3: fibers and cost in gray; suggestion red if there is one, green if not
@@ -1667,16 +1679,16 @@ function renderCalorieReport(){
     ? `${first.toLocaleDateString(undefined,{day:'numeric',month:'short'})} – ${last.toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'})}`
     : first.toLocaleDateString(undefined,{month:'long',year:'numeric'});
 
-  // summary grid: logged values use the macro colours, targets are gray
-  const dash = '—';
-  const mT = v => hasMacroTarget ? `${Math.round(v)} g` : dash;
+  // summary grid, columns left to right: Target, Logged, delta (logged minus target)
+  const val = (v, cls, unit) => `<span class="${cls}">${Math.round(v)}${unit}</span>`;
+  const tval = (v, cls, unit) => hasMacroTarget ? val(v, cls, unit) : '<span class="mut">—</span>';
   byId('reportSummary').innerHTML = `
     <div class="rep-grid">
-      <span></span><b>Logged</b><b>Target</b>
-      <span class="mut">Calories</span><span class="c-cal">${Math.round(logged.calories)} kcal</span><span class="tgt">${Math.round(tgt.calories)} kcal</span>
-      <span class="mut">Protein</span><span class="c-p">${Math.round(logged.protein)} g</span><span class="tgt">${mT(tgt.protein)}</span>
-      <span class="mut">Carbs</span><span class="c-c">${Math.round(logged.carbs)} g</span><span class="tgt">${mT(tgt.carbs)}</span>
-      <span class="mut">Fat</span><span class="c-f">${Math.round(logged.fat)} g</span><span class="tgt">${mT(tgt.fat)}</span>
+      <span></span><b>Target</b><b>Logged</b><span></span>
+      <span class="mut">kcal</span>${val(tgt.calories, 'c-cal', '')}${val(logged.calories, 'c-cal', '')}${deltaHtml('calories', logged.calories, tgt.calories, '')}
+      <span class="mut">Protein</span>${tval(tgt.protein, 'c-p', 'g')}${val(logged.protein, 'c-p', 'g')}${deltaHtml('protein', logged.protein, hasMacroTarget ? tgt.protein : null, 'g')}
+      <span class="mut">Carbs</span>${tval(tgt.carbs, 'c-c', 'g')}${val(logged.carbs, 'c-c', 'g')}${deltaHtml('carbs', logged.carbs, hasMacroTarget ? tgt.carbs : null, 'g')}
+      <span class="mut">Fat</span>${tval(tgt.fat, 'c-f', 'g')}${val(logged.fat, 'c-f', 'g')}${deltaHtml('fat', logged.fat, hasMacroTarget ? tgt.fat : null, 'g')}
     </div>`;
 
   // one row per day: logged calories and macros only
@@ -1695,14 +1707,18 @@ function renderCalorieReport(){
     rowsEl.appendChild(row);
   });
 
-  // chart: logged calories per day
+  // chart: logged calories per day, with the target as a red line
   const ctx = byId('calorieReportChart');
   if(calorieReportChart) calorieReportChart.destroy();
   calorieReportChart = new Chart(ctx, {
     type:'bar',
     data:{
       labels: dates.map(d => d.slice(8,10) + '/' + d.slice(5,7)),
-      datasets:[{ label:'Calories logged', data: per.map(m => Math.round(m.calories)), backgroundColor:'#42a5f5' }]
+      datasets:[
+        { type:'bar', label:'Calories logged', data: per.map(m => Math.round(m.calories)), backgroundColor:'#42a5f5', order:2 },
+        { type:'line', label:'Target', data: dates.map(d => Math.round(getTargetForDate(d).calories)),
+          borderColor:'#ff5252', backgroundColor:'#ff5252', borderWidth:2, pointRadius:0, stepped:true, order:1 }
+      ]
     },
     options:{
       responsive:true, maintainAspectRatio:false,
