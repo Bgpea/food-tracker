@@ -234,7 +234,7 @@
   .seg{ display:flex; gap:6px; margin-bottom:12px; }
   .seg button{ flex:1; }
   .tgt-row{ display:flex; align-items:center; gap:8px; margin-bottom:8px; }
-  .tgt-row label{ flex:1; font-size:14px; color:#cfcfcf; }
+  .tgt-row .t-lbl{ flex:1; font-size:14px; color:#cfcfcf; }
   .tgt-row input{ width:92px; }
   .tgt-val{ min-width:52px; text-align:right; font-size:13px; color:var(--accent); }
   .tgt-total{ font-size:13px; text-align:right; margin-top:4px; color:#cfcfcf; }
@@ -380,27 +380,7 @@
         <div id="targetCurrent" class="hint" style="margin:0; color:#cfcfcf"></div>
       </div>
 
-      <div class="seg" style="margin-top:12px">
-        <button id="tgtModeMacros" onclick="setTargetMode('macros')">Target macros</button>
-        <button id="tgtModeCalories" onclick="setTargetMode('calories')">Target calories</button>
-      </div>
-
-      <!-- Mode 1: type grams, calories are calculated -->
-      <div id="tgtMacrosForm" hidden>
-        <div class="tgt-row"><label for="tgtProtein">Protein (g)</label><input id="tgtProtein" type="number" min="0" step="1" inputmode="decimal" oninput="updateTargetPreview()"></div>
-        <div class="tgt-row"><label for="tgtCarbs">Carbs (g)</label><input id="tgtCarbs" type="number" min="0" step="1" inputmode="decimal" oninput="updateTargetPreview()"></div>
-        <div class="tgt-row"><label for="tgtFat">Fat (g)</label><input id="tgtFat" type="number" min="0" step="1" inputmode="decimal" oninput="updateTargetPreview()"></div>
-        <div id="tgtMacrosKcal" class="tgt-total c-cal"></div>
-      </div>
-
-      <!-- Mode 2: type calories, choose percentages, grams are calculated -->
-      <div id="tgtCaloriesForm" hidden>
-        <div class="tgt-row"><label for="tgtCalories">Calories (kcal)</label><input id="tgtCalories" type="number" min="0" step="10" inputmode="decimal" oninput="updateTargetPreview()"></div>
-        <div class="tgt-row"><label for="tgtPctP">Protein (%)</label><input id="tgtPctP" type="number" min="0" max="100" step="1" inputmode="decimal" oninput="updateTargetPreview()"><span id="tgtGramsP" class="tgt-val c-p"></span></div>
-        <div class="tgt-row"><label for="tgtPctC">Carbs (%)</label><input id="tgtPctC" type="number" min="0" max="100" step="1" inputmode="decimal" oninput="updateTargetPreview()"><span id="tgtGramsC" class="tgt-val c-c"></span></div>
-        <div class="tgt-row"><label for="tgtPctF">Fat (%)</label><input id="tgtPctF" type="number" min="0" max="100" step="1" inputmode="decimal" oninput="updateTargetPreview()"><span id="tgtGramsF" class="tgt-val c-f"></span></div>
-        <div id="tgtPctTotal" class="tgt-total"></div>
-      </div>
+      <div id="targetFormHost" style="margin-top:12px"></div>
 
       <button style="width:100%; margin-top:12px; background:#174611;" onclick="saveTarget()">Save target</button>
       <div id="tgtMsg" class="hint" style="color:#8fd18f"></div>
@@ -477,7 +457,27 @@ let savedMealsDB = JSON.parse(localStorage.getItem(SAVED_MEALS_KEY) || '[]');
 const TARGETS_KEY = 'targetsHistory';
 const BASE_DATE = '1970-01-01';
 let targetsHistory = loadTargets();
-let dayTargets = JSON.parse(localStorage.getItem('dayTargets') || '{}');   // { 'YYYY-MM-DD': calories } for single days
+/* single-day targets: { 'YYYY-MM-DD': target entry }. (Older versions stored just the calories: converted here.) */
+function overrideFromCalories(date, cal){
+  const base = getBaseTargetForDate(date);
+  const k = base.calories > 0 ? cal / base.calories : 1;
+  const e = { from:date, mode: base.protein != null ? base.mode : 'calories', calories:cal, protein:null, carbs:null, fat:null, pct: base.pct || null };
+  if(base.protein != null){ e.protein = base.protein * k; e.carbs = base.carbs * k; e.fat = base.fat * k; }
+  return e;
+}
+function loadDayTargets(){
+  let raw = {};
+  try{ raw = JSON.parse(localStorage.getItem('dayTargets') || '{}') || {}; }catch(e){}
+  const out = {}; let changed = false;
+  Object.keys(raw).forEach(d => {
+    const v = raw[d];
+    if(typeof v === 'number'){ changed = true; if(v > 0) out[d] = overrideFromCalories(d, v); }
+    else if(v && typeof v === 'object' && +v.calories > 0) out[d] = v;
+  });
+  if(changed) localStorage.setItem('dayTargets', JSON.stringify(out));
+  return out;
+}
+let dayTargets = loadDayTargets();
 function persistDayTargets(){ localStorage.setItem('dayTargets', JSON.stringify(dayTargets)); }
 let reportPeriod = 'week';
 let calorieReportChart = null;
@@ -562,13 +562,15 @@ function openAddMealModal(){
       return;
     }
     let shown = 0;
-    savedMealsDB.forEach(meal => {
+    // empty meals first, then the ones with foods (each group keeps its order)
+    const ordered = savedMealsDB.filter(m => m.foods.length === 0).concat(savedMealsDB.filter(m => m.foods.length > 0));
+    ordered.forEach(meal => {
       if(q && !meal.name.toLowerCase().includes(q)) return;
       shown++;
       const b = document.createElement('button'); b.className = 'am-item';
       b.textContent = meal.name;
       const sub = document.createElement('small');
-      sub.textContent = `${meal.foods.length} food${meal.foods.length === 1 ? '' : 's'} · ${Math.round(sumMacros(meal.foods).calories)} kcal`;
+      sub.innerHTML = meal.foods.length ? fmtMacrosHtml(sumMacros(meal.foods)) : 'Empty meal';
       b.appendChild(sub);
       b.addEventListener('click', () => { modal.close(); addMealToDay(meal.name, meal.foods); });
       list.appendChild(b);
@@ -674,10 +676,6 @@ function saveMeal(mealName){
   const date = dateInput.value;
   const currentMeal = (mealsDB[date] && mealsDB[date][mealName]) || [];
 
-  if(currentMeal.length === 0){
-    alert('Meal is empty');
-    return;
-  }
   const snapshot = JSON.parse(JSON.stringify(currentMeal));
 
   askName('Save meal as', mealName, 'Save', name => {
@@ -919,26 +917,33 @@ function renderTotalsAndChart(){
       totals.ammino += (f.protein || 0) * fac * (f.ammino || 0);
     });
   });
-  // Target row first, then Logged. An arrow left of a logged value shows which way it is from the target:
-  // ↑ below the target, ↓ above it.
+  // Rows: Target, Logged, Diff (logged minus target). Only the calories keep the small ↑ / ↓ arrow.
   const tg = getTargetForDate(date);
   const hasMacros = tg.protein != null;
   const rd = Math.round;
-  const cell = (logged, target, cls, unit) => {
+  const cell = (logged, target, cls, unit, withArrow) => {
     let arrow = '';
-    if(target != null){
+    if(withArrow && target != null){
       if(rd(logged) < rd(target)) arrow = '↑';
       else if(rd(logged) > rd(target)) arrow = '↓';
     }
     return `<span class="${cls}"><span class="v">${arrow ? `<em class="arr">${arrow}</em>` : ''}${rd(logged)}${unit}</span></span>`;
   };
   const tcell = (v, unit) => `<span class="tgt">${v == null ? '—' : rd(v) + unit}</span>`;
+  const dcell = (logged, target, unit) => {
+    if(target == null) return '<span class="tgt">—</span>';
+    const d = rd(logged) - rd(target);
+    const color = d < 0 ? '#ff6b6b' : (d > 0 ? '#8fd18f' : '#ffca28');   // red / green / yellow
+    return `<span style="color:${color}">${d > 0 ? '+' : ''}${d}${unit}</span>`;
+  };
   byId('dayTotals').innerHTML = `
     <span></span><b class="c-cal">kcal</b><b class="c-p">Protein</b><b class="c-c">Carbs</b><b class="c-f">Fat</b>
     <button class="lbl-btn" onclick="editDayTarget()" title="Change this day's target">Target ✎</button>
     ${tcell(tg.calories, '')}${tcell(hasMacros ? tg.protein : null, 'g')}${tcell(hasMacros ? tg.carbs : null, 'g')}${tcell(hasMacros ? tg.fat : null, 'g')}
     <span class="lbl">Logged</span>
-    ${cell(totals.calories, tg.calories, 'c-cal', '')}${cell(totals.protein, hasMacros ? tg.protein : null, 'c-p', 'g')}${cell(totals.carbs, hasMacros ? tg.carbs : null, 'c-c', 'g')}${cell(totals.fat, hasMacros ? tg.fat : null, 'c-f', 'g')}`;
+    ${cell(totals.calories, tg.calories, 'c-cal', '', true)}${cell(totals.protein, null, 'c-p', 'g', false)}${cell(totals.carbs, null, 'c-c', 'g', false)}${cell(totals.fat, null, 'c-f', 'g', false)}
+    <span class="lbl">Diff</span>
+    ${dcell(totals.calories, tg.calories, '')}${dcell(totals.protein, hasMacros ? tg.protein : null, 'g')}${dcell(totals.carbs, hasMacros ? tg.carbs : null, 'g')}${dcell(totals.fat, hasMacros ? tg.fat : null, 'g')}`;
   byId('targetNote').textContent = tg.override ? 'Custom target for this day' : '';
 
   // row 3: fibers and cost in gray; suggestion red if there is one, green if not
@@ -989,7 +994,7 @@ function renderSavedMealsEditor(){
     const text = document.createElement('span'); text.className = 'nav-text';
     const b = document.createElement('b'); b.textContent = meal.name;
     const small = document.createElement('small');
-    small.textContent = `${meal.foods.length} food${meal.foods.length === 1 ? '' : 's'} · ${Math.round(sumMacros(meal.foods).calories)} kcal`;
+    small.innerHTML = meal.foods.length ? fmtMacrosHtml(sumMacros(meal.foods)) : 'Empty meal';
     text.append(b, small);
     const chev = document.createElement('span'); chev.className = 'nav-chev'; chev.textContent = '›';
     btn.append(text, chev);
@@ -1074,7 +1079,7 @@ function renderDraftFoods(){
   wrap.innerHTML = '';
   const draft = editingMeal.draft;
   if(draft.length === 0){
-    wrap.innerHTML = '<div class="hint">No foods yet. Search below to add one.</div>';
+    wrap.innerHTML = '<div class="hint">No foods yet. Search below to add one, or save it empty.</div>';
     return;
   }
   draft.forEach((food, i) => {
@@ -1108,7 +1113,6 @@ function saveDraftMeal(){
   const name = (byId('savedMealNameInput').value || '').trim();
   if(!name) return alert('Enter a meal name');
   if(savedMealsDB.some((m, j) => j !== idx && m.name.toLowerCase() === name.toLowerCase())) return alert('Another saved meal already has this name');
-  if(draft.length === 0) return alert(idx === null ? 'Add at least one food' : 'Keep at least one food, or delete the meal');
   if(draft.some(f => !(+f.quantity > 0))) return alert('Every quantity must be greater than 0');
 
   const foods = JSON.parse(JSON.stringify(draft));
@@ -1272,7 +1276,12 @@ function cleanTargetsHistory(raw){
 function cleanDayTargets(raw){
   const out = {};
   if(raw && typeof raw === 'object' && !Array.isArray(raw)){
-    Object.keys(raw).forEach(d => { if(/^\d{4}-\d{2}-\d{2}$/.test(d) && +raw[d] > 0) out[d] = +raw[d]; });
+    Object.keys(raw).forEach(d => {
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(d)) return;
+      const v = raw[d];
+      if(typeof v === 'number' || typeof v === 'string'){ if(+v > 0) out[d] = overrideFromCalories(d, +v); }
+      else{ const e = cleanTargetsHistory([{ ...v, from:d }])[0]; if(e) out[d] = e; }
+    });
   }
   return out;
 }
@@ -1398,42 +1407,36 @@ function getBaseTargetForDate(date){
   for(const e of targetsHistory){ if(e.from <= date) t = e; else break; }
   return t;
 }
-/* Target for a day: the general target, unless a custom calorie target was set for that day
-   (macro grams scale in proportion to the calories). */
+/* Target for a day: the day's own target if one was set, otherwise the general target */
 function getTargetForDate(date){
-  const t = getBaseTargetForDate(date);
   const ov = dayTargets[date];
-  if(ov == null) return t;
-  const k = t.calories > 0 ? ov / t.calories : 1;
-  const c = { ...t, calories: ov, override: true };
-  if(t.protein != null){ c.protein = t.protein * k; c.carbs = t.carbs * k; c.fat = t.fat * k; }
-  return c;
+  if(ov) return { ...ov, from:date, override:true };
+  return getBaseTargetForDate(date);
 }
 
+/* Same form as the Targets page, but the result only applies to the selected day */
 function editDayTarget(){
   const date = dateInput.value;
-  const t = getTargetForDate(date);
+  const form = createTargetForm(getTargetForDate(date));
   const wrap = document.createElement('div');
-  wrap.innerHTML = `
-    <div class="hint" style="margin:0 0 8px">Calorie target for this day only. Macro targets scale in proportion.</div>
-    <label class="af-row"><span>Calories (kcal)</span><input type="number" min="0" step="10" inputmode="decimal"></label>`;
-  const inp = wrap.querySelector('input');
-  inp.value = Math.round(t.calories);
+  const hint = document.createElement('div'); hint.className = 'hint'; hint.style.margin = '0 0 10px';
+  hint.textContent = 'This target applies to this day only.';
+  wrap.append(hint, form.el);
   const label = parseDay(date).toLocaleDateString(undefined, { weekday:'short', day:'numeric', month:'short' });
   const buttons = [{ text:'Cancel' }];
-  if(dayTargets[date] != null){
+  if(dayTargets[date]){
     buttons.push({ text:'Reset', bg:'#5a1a1a', onClick: () => { delete dayTargets[date]; persistDayTargets(); renderAll(); } });
   }
   buttons.push({ text:'Save', bg:'#174611', onClick: () => {
-    const v = parseFloat(inp.value);
-    if(!(v > 0)){ alert('Enter a calorie target'); return false; }
-    if(Math.round(v) === Math.round(getBaseTargetForDate(date).calories)) delete dayTargets[date];
-    else dayTargets[date] = v;
+    const entry = form.getEntry();
+    if(!entry) return false;
+    entry.from = date;
+    dayTargets[date] = entry;
     persistDayTargets(); renderAll();
   }});
   openModal('Target · ' + label, wrap, buttons);
-  inp.focus(); inp.select();
 }
+
 function macrosToKcal(p, c, f){ return p*4 + c*4 + f*9; }
 function fmtTarget(t){
   let out = `${Math.round(t.calories)} kcal`;
@@ -1456,8 +1459,110 @@ function pctFromGrams(p, c, f){
   return { p:r[0], c:r[1], f:r[2] };
 }
 
-/* ---------- Targets page form ---------- */
-let tgtMode = 'calories';
+/* ---------- Target form (used by the Targets page AND the per-day box, so both work exactly the same) ---------- */
+function createTargetForm(t){
+  const root = document.createElement('div');
+  root.innerHTML = `
+    <div class="seg">
+      <button type="button" class="tg-m-macros">Target macros</button>
+      <button type="button" class="tg-m-cal">Target calories</button>
+    </div>
+    <div class="tg-macros">
+      <label class="tgt-row"><span class="t-lbl">Protein (g)</span><input class="tg-p" type="number" min="0" step="1" inputmode="decimal"></label>
+      <label class="tgt-row"><span class="t-lbl">Carbs (g)</span><input class="tg-c" type="number" min="0" step="1" inputmode="decimal"></label>
+      <label class="tgt-row"><span class="t-lbl">Fat (g)</span><input class="tg-f" type="number" min="0" step="1" inputmode="decimal"></label>
+      <div class="tgt-total c-cal tg-kcal-out"></div>
+    </div>
+    <div class="tg-cal">
+      <label class="tgt-row"><span class="t-lbl">Calories (kcal)</span><input class="tg-kcal" type="number" min="0" step="10" inputmode="decimal"></label>
+      <label class="tgt-row"><span class="t-lbl">Protein (%)</span><input class="tg-pp" type="number" min="0" max="100" step="1" inputmode="decimal"><span class="tgt-val c-p tg-gp"></span></label>
+      <label class="tgt-row"><span class="t-lbl">Carbs (%)</span><input class="tg-pc" type="number" min="0" max="100" step="1" inputmode="decimal"><span class="tgt-val c-c tg-gc"></span></label>
+      <label class="tgt-row"><span class="t-lbl">Fat (%)</span><input class="tg-pf" type="number" min="0" max="100" step="1" inputmode="decimal"><span class="tgt-val c-f tg-gf"></span></label>
+      <div class="tgt-total tg-pct-total"></div>
+    </div>`;
+  const $ = sel => root.querySelector(sel);
+  const num = sel => { const v = parseFloat($(sel).value); return Number.isFinite(v) ? v : 0; };
+  let mode = t.mode === 'macros' ? 'macros' : 'calories';
+
+  $('.tg-p').value = t.protein != null ? round1(t.protein) : '';
+  $('.tg-c').value = t.carbs   != null ? round1(t.carbs)   : '';
+  $('.tg-f').value = t.fat     != null ? round1(t.fat)     : '';
+  $('.tg-kcal').value = Math.round(t.calories);
+  const pct = t.pct || (t.protein != null ? pctFromGrams(t.protein, t.carbs, t.fat) : { p:30, c:40, f:30 });
+  $('.tg-pp').value = pct.p; $('.tg-pc').value = pct.c; $('.tg-pf').value = pct.f;
+
+  function preview(){
+    if(mode === 'macros'){
+      const kcal = macrosToKcal(num('.tg-p'), num('.tg-c'), num('.tg-f'));
+      $('.tg-kcal-out').textContent = `Target calories: ${Math.round(kcal)} kcal`;
+    }else{
+      const kcal = num('.tg-kcal'), pp = num('.tg-pp'), pc = num('.tg-pc'), pf = num('.tg-pf');
+      $('.tg-gp').textContent = `${Math.round(kcal * pp / 100 / 4)} g`;
+      $('.tg-gc').textContent = `${Math.round(kcal * pc / 100 / 4)} g`;
+      $('.tg-gf').textContent = `${Math.round(kcal * pf / 100 / 9)} g`;
+      const sum = Math.round((pp + pc + pf) * 100) / 100;
+      const tot = $('.tg-pct-total');
+      tot.textContent = `Total: ${sum}%` + (sum === 100 ? '' : ' (must be 100%)');
+      tot.style.color = sum === 100 ? '#8fd18f' : '#ff9fa3';
+    }
+  }
+
+  function setMode(newMode, convert){
+    if(convert && newMode !== mode){
+      if(newMode === 'calories'){                       // macros -> calories
+        const p = num('.tg-p'), c = num('.tg-c'), f = num('.tg-f');
+        const kcal = macrosToKcal(p, c, f);
+        if(kcal > 0){
+          const pc = pctFromGrams(p, c, f);
+          $('.tg-kcal').value = Math.round(kcal);
+          $('.tg-pp').value = pc.p; $('.tg-pc').value = pc.c; $('.tg-pf').value = pc.f;
+        }
+      }else{                                            // calories -> macros
+        const kcal = num('.tg-kcal');
+        if(kcal > 0){
+          $('.tg-p').value = Math.round(kcal * num('.tg-pp') / 100 / 4);
+          $('.tg-c').value = Math.round(kcal * num('.tg-pc') / 100 / 4);
+          $('.tg-f').value = Math.round(kcal * num('.tg-pf') / 100 / 9);
+        }
+      }
+    }
+    mode = newMode;
+    $('.tg-macros').hidden = (mode !== 'macros');
+    $('.tg-cal').hidden = (mode !== 'calories');
+    $('.tg-m-macros').classList.toggle('active', mode === 'macros');
+    $('.tg-m-cal').classList.toggle('active', mode === 'calories');
+    preview();
+  }
+
+  /* returns the target entry, or null (after an alert) if something is invalid */
+  function getEntry(){
+    if(mode === 'macros'){
+      const p = num('.tg-p'), c = num('.tg-c'), f = num('.tg-f');
+      if(p < 0 || c < 0 || f < 0){ alert('Values cannot be negative'); return null; }
+      const kcal = macrosToKcal(p, c, f);
+      if(kcal <= 0){ alert('Enter at least one macro target'); return null; }
+      return { mode:'macros', calories:kcal, protein:p, carbs:c, fat:f, pct:null };
+    }
+    const kcal = num('.tg-kcal'), pp = num('.tg-pp'), pc = num('.tg-pc'), pf = num('.tg-pf');
+    if(kcal <= 0){ alert('Enter a calorie target'); return null; }
+    if(pp < 0 || pc < 0 || pf < 0){ alert('Percentages cannot be negative'); return null; }
+    if(Math.abs(pp + pc + pf - 100) > 0.01){ alert('Macro percentages must add up to 100%'); return null; }
+    return {
+      mode:'calories', calories:kcal,
+      protein: kcal * pp / 100 / 4, carbs: kcal * pc / 100 / 4, fat: kcal * pf / 100 / 9,
+      pct:{ p:pp, c:pc, f:pf }
+    };
+  }
+
+  root.querySelectorAll('input').forEach(i => i.addEventListener('input', preview));
+  $('.tg-m-macros').addEventListener('click', () => setMode('macros', true));
+  $('.tg-m-cal').addEventListener('click', () => setMode('calories', true));
+  setMode(mode, false);
+  return { el:root, getEntry };
+}
+
+/* ---------- Targets page ---------- */
+let targetForm = null;
 
 function initTargetForm(){
   const today = localISO(new Date());
@@ -1465,83 +1570,18 @@ function initTargetForm(){
   byId('targetCurrent').textContent =
     `Current target: ${fmtTarget(t)}` + (t.from === BASE_DATE ? ' (default)' :
       ` (since ${parseDay(t.from).toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'})})`);
-
-  byId('tgtProtein').value = t.protein != null ? round1(t.protein) : '';
-  byId('tgtCarbs').value   = t.carbs   != null ? round1(t.carbs)   : '';
-  byId('tgtFat').value     = t.fat     != null ? round1(t.fat)     : '';
-  byId('tgtCalories').value = Math.round(t.calories);
-  const pct = t.pct || (t.protein != null ? pctFromGrams(t.protein, t.carbs, t.fat) : { p:30, c:40, f:30 });
-  byId('tgtPctP').value = pct.p; byId('tgtPctC').value = pct.c; byId('tgtPctF').value = pct.f;
+  targetForm = createTargetForm(t);
+  const host = byId('targetFormHost');
+  host.innerHTML = '';
+  host.appendChild(targetForm.el);
   byId('tgtMsg').textContent = '';
-  setTargetMode(t.mode, false);
-}
-
-function setTargetMode(mode, convert = true){
-  if(convert && mode !== tgtMode){
-    if(mode === 'calories'){                       // macros -> calories
-      const p = numVal('tgtProtein'), c = numVal('tgtCarbs'), f = numVal('tgtFat');
-      const kcal = macrosToKcal(p, c, f);
-      if(kcal > 0){
-        const pct = pctFromGrams(p, c, f);
-        byId('tgtCalories').value = Math.round(kcal);
-        byId('tgtPctP').value = pct.p; byId('tgtPctC').value = pct.c; byId('tgtPctF').value = pct.f;
-      }
-    }else{                                         // calories -> macros
-      const kcal = numVal('tgtCalories');
-      if(kcal > 0){
-        byId('tgtProtein').value = Math.round(kcal * numVal('tgtPctP') / 100 / 4);
-        byId('tgtCarbs').value   = Math.round(kcal * numVal('tgtPctC') / 100 / 4);
-        byId('tgtFat').value     = Math.round(kcal * numVal('tgtPctF') / 100 / 9);
-      }
-    }
-  }
-  tgtMode = mode;
-  byId('tgtMacrosForm').hidden = (mode !== 'macros');
-  byId('tgtCaloriesForm').hidden = (mode !== 'calories');
-  byId('tgtModeMacros').classList.toggle('active', mode === 'macros');
-  byId('tgtModeCalories').classList.toggle('active', mode === 'calories');
-  updateTargetPreview();
-}
-
-function updateTargetPreview(){
-  if(tgtMode === 'macros'){
-    const kcal = macrosToKcal(numVal('tgtProtein'), numVal('tgtCarbs'), numVal('tgtFat'));
-    byId('tgtMacrosKcal').textContent = `Target calories: ${Math.round(kcal)} kcal`;
-  }else{
-    const kcal = numVal('tgtCalories');
-    const pp = numVal('tgtPctP'), pc = numVal('tgtPctC'), pf = numVal('tgtPctF');
-    byId('tgtGramsP').textContent = `${Math.round(kcal * pp / 100 / 4)} g`;
-    byId('tgtGramsC').textContent = `${Math.round(kcal * pc / 100 / 4)} g`;
-    byId('tgtGramsF').textContent = `${Math.round(kcal * pf / 100 / 9)} g`;
-    const sum = Math.round((pp + pc + pf) * 100) / 100;
-    const tot = byId('tgtPctTotal');
-    tot.textContent = `Total: ${sum}%` + (sum === 100 ? '' : ' (must be 100%)');
-    tot.style.color = sum === 100 ? '#8fd18f' : '#ff9fa3';
-  }
 }
 
 function saveTarget(){
-  let entry;
-  if(tgtMode === 'macros'){
-    const p = numVal('tgtProtein'), c = numVal('tgtCarbs'), f = numVal('tgtFat');
-    if(p < 0 || c < 0 || f < 0) return alert('Values cannot be negative');
-    const kcal = macrosToKcal(p, c, f);
-    if(kcal <= 0) return alert('Enter at least one macro target');
-    entry = { mode:'macros', calories:kcal, protein:p, carbs:c, fat:f, pct:null };
-  }else{
-    const kcal = numVal('tgtCalories');
-    const pp = numVal('tgtPctP'), pc = numVal('tgtPctC'), pf = numVal('tgtPctF');
-    if(kcal <= 0) return alert('Enter a calorie target');
-    if(pp < 0 || pc < 0 || pf < 0) return alert('Percentages cannot be negative');
-    if(Math.abs(pp + pc + pf - 100) > 0.01) return alert('Macro percentages must add up to 100%');
-    entry = {
-      mode:'calories', calories:kcal,
-      protein: kcal * pp / 100 / 4, carbs: kcal * pc / 100 / 4, fat: kcal * pf / 100 / 9,
-      pct:{ p:pp, c:pc, f:pf }
-    };
-  }
+  const entry = targetForm && targetForm.getEntry();
+  if(!entry) return;
   entry.from = localISO(new Date());           // applies from today onward only
-  if(dayTargets[entry.from] != null){ delete dayTargets[entry.from]; persistDayTargets(); }   // today follows the new target
+  if(dayTargets[entry.from]){ delete dayTargets[entry.from]; persistDayTargets(); }   // today follows the new target
   const i = targetsHistory.findIndex(e => e.from === entry.from);
   if(i >= 0) targetsHistory[i] = entry; else targetsHistory.push(entry);
   targetsHistory.sort((x,y) => x.from < y.from ? -1 : 1);
