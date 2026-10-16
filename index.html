@@ -638,6 +638,7 @@ function deltaHtml(kind, logged, target, unit){
 }
 
 const SAVE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>';   // floppy-disk icon used by the small Save buttons
+const PLUS_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';   // plus icon for the small Add buttons
 const SEP = '<span class="sep"></span>';          // gap between values (HTML)
 const SEP_TXT = '\u2002\u2002';                   // gap between values (plain text)
 
@@ -825,7 +826,7 @@ function renderMeals(){
     const qty = document.createElement('input'); qty.type='number'; qty.placeholder='g'; qty.className='qty-sm'; qty.id = `qty_${idSafe}`;
     addRow.appendChild(qty);
 
-    const addBtn = document.createElement('button'); addBtn.innerHTML = SAVE_ICON; addBtn.className='tiny-btn';
+    const addBtn = document.createElement('button'); addBtn.innerHTML = PLUS_ICON; addBtn.className='tiny-btn';
     addBtn.style.background = '#174611'; addBtn.title = 'Add food'; addBtn.setAttribute('aria-label', 'Add food');
     addBtn.addEventListener('click', ()=>{
       const foodName = (document.getElementById(`search_${idSafe}`).value || '').trim();
@@ -1091,7 +1092,7 @@ function showSavedMealDetail(idx){
         <div id="smResults" class="search-results" style="display:none"></div>
       </div>
       <input id="smQty" type="number" placeholder="g" class="qty-sm">
-      <button id="smAdd" class="tiny-btn" style="background:#174611" title="Add food" aria-label="Add food">${SAVE_ICON}</button>
+      <button id="smAdd" class="tiny-btn" style="background:#174611" title="Add food" aria-label="Add food">${PLUS_ICON}</button>
     </div>
     <div style="display:flex; gap:8px; margin-top:14px;">
       <button style="flex:1; background:#174611;" onclick="saveDraftMeal()">Save</button>
