@@ -306,6 +306,14 @@
   .db-row input.db-num{ width:64px; padding:6px 4px; text-align:center; -moz-appearance:textfield; appearance:textfield; }
   .db-row input.db-num::-webkit-inner-spin-button, .db-row input.db-num::-webkit-outer-spin-button{ -webkit-appearance:none; margin:0; }
 
+
+  /* ===== Costs report ===== */
+  .cost-total{ display:flex; justify-content:space-between; align-items:baseline; margin-bottom:4px; }
+  .cost-total .mut{ font-size:13px; color:var(--muted); }
+  .cost-total b{ font-size:22px; color:#fff; }
+  .cost-sub{ display:flex; justify-content:space-between; font-size:13px; margin-bottom:10px; }
+  .cost-sub .mut{ color:var(--muted); }
+
   @media (max-width:420px){
     .container{ width:94%; }
     .db-row input{ width:100%; }
@@ -342,7 +350,7 @@
       </button>
       <button class="nav-card" onclick="openPage('reports')">
         <span class="nav-icon">📊</span>
-        <span class="nav-text"><b>Calorie Reports</b><small>Weekly and monthly overview</small></span>
+        <span class="nav-text"><b>Reports</b><small>Calories and costs, weekly and monthly</small></span>
         <span class="nav-chev">›</span>
       </button>
       <button class="nav-card" onclick="openPage('settings')">
@@ -408,7 +416,13 @@
     </section>
 
     <section class="page" id="page-reports" hidden>
-      <div class="page-header"><button class="back-btn" onclick="goBack()" aria-label="Back">←</button><h2>Calorie Reports</h2></div>
+      <div class="page-header"><button class="back-btn" onclick="goBack()" aria-label="Back">←</button><h2>Reports</h2></div>
+
+      <div class="seg">
+        <button id="repTabCal" onclick="setReportTab('calories')">Calories</button>
+        <button id="repTabCost" onclick="setReportTab('costs')">Costs</button>
+      </div>
+
       <div class="report-box" style="margin-top:0">
         <div class="report-controls">
           <button id="repWeek" onclick="setReportPeriod('week')">Weekly</button>
@@ -420,9 +434,20 @@
           <button class="small-btn" style="flex:0 0 40px" onclick="shiftReport(1)" aria-label="Next">›</button>
           <button class="small-btn" style="flex:0 0 56px" onclick="resetReport()">Today</button>
         </div>
-        <div id="reportSummary"></div>
-        <div class="report-chart-wrap"><canvas id="calorieReportChart"></canvas></div>
-        <div id="calorieReportRows"></div>
+
+        <!-- Calories -->
+        <div id="repCalories">
+          <div id="reportSummary"></div>
+          <div class="report-chart-wrap"><canvas id="calorieReportChart"></canvas></div>
+          <div id="calorieReportRows"></div>
+        </div>
+
+        <!-- Costs -->
+        <div id="repCosts" hidden>
+          <div id="costSummary"></div>
+          <div class="report-chart-wrap"><canvas id="costReportChart"></canvas></div>
+          <div id="costReportRows"></div>
+        </div>
       </div>
     </section>
 
@@ -501,6 +526,8 @@ let dayTargets = loadDayTargets();
 function persistDayTargets(){ localStorage.setItem('dayTargets', JSON.stringify(dayTargets)); }
 let reportPeriod = 'week';
 let calorieReportChart = null;
+let costReportChart = null;
+let reportTab = 'calories';
 
 const predefinedMeals = ["Breakfast","Lunch","Dinner","Snacks"];
 let macroChart = null;
@@ -541,7 +568,7 @@ function renderAll(){
   renderTotalsAndChart();
   dbSearch(); // refresh DB editor if search active (keeps it in sync)
   renderSavedMealsEditor();
-  renderCalorieReport();
+  renderReports();
   updateHomeSummary();
 }
 
@@ -1666,15 +1693,16 @@ function caloriesForDate(date){ return macrosForDate(date).calories; }
 
 let reportAnchor = localISO(new Date());
 
-function setReportPeriod(period){ reportPeriod = period; renderCalorieReport(); }
+function setReportPeriod(period){ reportPeriod = period; renderReports(); }
+function setReportTab(tab){ reportTab = tab; renderReports(); }
 function shiftReport(dir){
   const d = parseDay(reportAnchor);
   if(reportPeriod === 'week') d.setDate(d.getDate() + 7 * dir);
   else { d.setDate(1); d.setMonth(d.getMonth() + dir); }
   reportAnchor = localISO(d);
-  renderCalorieReport();
+  renderReports();
 }
-function resetReport(){ reportAnchor = localISO(new Date()); renderCalorieReport(); }
+function resetReport(){ reportAnchor = localISO(new Date()); renderReports(); }
 
 function reportDates(){
   const base = parseDay(reportAnchor);
@@ -1694,6 +1722,68 @@ function reportDates(){
   return out;
 }
 
+/* period buttons + label, shared by the Calories and Costs subsections */
+function renderReportHeader(dates){
+  byId('repWeek').classList.toggle('active', reportPeriod === 'week');
+  byId('repMonth').classList.toggle('active', reportPeriod === 'month');
+  const first = parseDay(dates[0]), last = parseDay(dates[dates.length-1]);
+  byId('reportLabel').textContent = reportPeriod === 'week'
+    ? `${first.toLocaleDateString(undefined,{day:'numeric',month:'short'})} – ${last.toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'})}`
+    : first.toLocaleDateString(undefined,{month:'long',year:'numeric'});
+}
+
+function renderReports(){
+  if(!byId('calorieReportRows')) return;
+  byId('repTabCal').classList.toggle('active', reportTab === 'calories');
+  byId('repTabCost').classList.toggle('active', reportTab === 'costs');
+  byId('repCalories').hidden = (reportTab !== 'calories');
+  byId('repCosts').hidden = (reportTab !== 'costs');
+  if(reportTab === 'costs') renderCostReport(); else renderCalorieReport();
+}
+
+/* Costs: total for the week / month, plus the cost of every day */
+function renderCostReport(){
+  const rowsEl = byId('costReportRows');
+  if(!rowsEl) return;
+  const dates = reportDates();
+  const per = dates.map(macrosForDate);
+  renderReportHeader(dates);
+
+  const total = per.reduce((a, m) => a + m.cost, 0);
+  const loggedDays = dates.filter(d => Object.values(mealsDB[d] || {}).some(m => m && m.length)).length;
+  const avg = loggedDays ? total / loggedDays : 0;
+  byId('costSummary').innerHTML = `
+    <div class="cost-total"><span class="mut">${reportPeriod === 'week' ? 'Weekly total' : 'Monthly total'}</span><b>${total.toFixed(2)} €</b></div>
+    <div class="cost-sub"><span class="mut">Daily average (${loggedDays} day${loggedDays === 1 ? '' : 's'} logged)</span><span>${avg.toFixed(2)} €</span></div>`;
+
+  rowsEl.innerHTML = '';
+  dates.forEach((date, i) => {
+    const row = document.createElement('div'); row.className = 'report-row';
+    const day = document.createElement('span');
+    day.textContent = parseDay(date).toLocaleDateString(undefined,{weekday:'short',day:'2-digit',month:'short'});
+    const val = document.createElement('span');
+    if(per[i].cost > 0){ val.textContent = per[i].cost.toFixed(2) + ' €'; val.style.color = '#cfcfcf'; }
+    else { val.textContent = '—'; val.style.color = '#666'; }
+    row.append(day, val);
+    rowsEl.appendChild(row);
+  });
+
+  const ctx = byId('costReportChart');
+  if(costReportChart) costReportChart.destroy();
+  costReportChart = new Chart(ctx, {
+    type:'bar',
+    data:{
+      labels: dates.map(d => d.slice(8,10) + '/' + d.slice(5,7)),
+      datasets:[{ label:'Cost (€)', data: per.map(m => +m.cost.toFixed(2)), backgroundColor:'#b0b0b0' }]
+    },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      scales:{ x:{ticks:{color:'#aaa'}}, y:{beginAtZero:true,ticks:{color:'#aaa'}} },
+      plugins:{ legend:{position:'bottom',labels:{color:'#ddd'}} }
+    }
+  });
+}
+
 function renderCalorieReport(){
   const rowsEl = byId('calorieReportRows');
   if(!rowsEl) return;
@@ -1711,13 +1801,7 @@ function renderCalorieReport(){
     if(t.protein != null){ hasMacroTarget = true; tgt.protein += t.protein; tgt.carbs += t.carbs; tgt.fat += t.fat; }
   });
 
-  // header: period buttons + label
-  byId('repWeek').classList.toggle('active', reportPeriod === 'week');
-  byId('repMonth').classList.toggle('active', reportPeriod === 'month');
-  const first = parseDay(dates[0]), last = parseDay(dates[dates.length-1]);
-  byId('reportLabel').textContent = reportPeriod === 'week'
-    ? `${first.toLocaleDateString(undefined,{day:'numeric',month:'short'})} – ${last.toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'})}`
-    : first.toLocaleDateString(undefined,{month:'long',year:'numeric'});
+  renderReportHeader(dates);
 
   // summary grid, columns left to right: Target, Logged, delta (logged minus target)
   const val = (v, cls, unit) => `<span class="${cls}">${Math.round(v)}${unit}</span>`;
@@ -1785,7 +1869,7 @@ function showPage(name, arg){
   document.querySelectorAll('.page').forEach(p => p.hidden = (p.id !== 'page-' + name));
   // charts need a visible canvas, so draw them when their page opens
   if(name === 'diary'){ renderMeals(); renderTotalsAndChart(); }
-  else if(name === 'reports'){ renderCalorieReport(); }
+  else if(name === 'reports'){ renderReports(); }
   else if(name === 'targets'){ initTargetForm(); }
   else if(name === 'edit-foods'){ dbSearch(); }
   else if(name === 'edit-meals'){
