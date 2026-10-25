@@ -314,6 +314,16 @@
   .cost-sub{ display:flex; justify-content:space-between; font-size:13px; margin-bottom:10px; }
   .cost-sub .mut{ color:var(--muted); }
 
+
+  /* ===== Logged food: ► / ▼ toggle and details ===== */
+  .food-item{ margin:6px 0; padding-bottom:6px; border-bottom:1px solid #242424; min-height:36px; }
+  .food-item .food-row{ margin:0; padding:0; border:0; min-height:30px; }
+  .food-arrow{ flex:0 0 12px; width:12px; font-size:10px; color:#9a9a9a; text-align:center; cursor:pointer; user-select:none; }
+  .food-name{ cursor:pointer; }
+  .food-detail{ font-size:11.5px; color:#cfcfcf; margin:3px 0 0 16px; }
+  .food-detail[hidden]{ display:none; }
+  .food-detail span{ white-space:nowrap; }
+
   @media (max-width:420px){
     .container{ width:94%; }
     .db-row input{ width:100%; }
@@ -528,6 +538,7 @@ let reportPeriod = 'week';
 let calorieReportChart = null;
 let costReportChart = null;
 let reportTab = 'calories';
+const expandedFoods = new Set();   // logged foods whose details are open: 'date|meal|index'
 
 const predefinedMeals = ["Breakfast","Lunch","Dinner","Snacks"];
 let macroChart = null;
@@ -796,11 +807,27 @@ function renderMeals(){
     // logged foods (single rows)
     const list = (meals[mealName] || []);
     list.forEach((entry, idx) => {
+      const item = document.createElement('div'); item.className='food-item';
       const row = document.createElement('div'); row.className='food-row';
 
       const left = document.createElement('div'); left.className='food-left';
+      // ► / ▼ + name: tap to show or hide calories, macros, cost and fibers of this food
+      const arrow = document.createElement('span'); arrow.className='food-arrow';
       const nameSpan = document.createElement('span'); nameSpan.className='food-name'; nameSpan.textContent = entry.name;
-      left.appendChild(nameSpan);
+      const detail = document.createElement('div'); detail.className='food-detail';
+      const foodKey = `${date}|${mealName}|${idx}`;
+      const fillDetail = () => { detail.innerHTML = fmtMacrosHtml(sumMacros([mealsDB[date][mealName][idx]]), true); };
+      const setOpen = open => {
+        arrow.textContent = open ? '▼' : '►';
+        nameSpan.setAttribute('aria-expanded', open ? 'true' : 'false');
+        detail.hidden = !open;
+        if(open){ fillDetail(); expandedFoods.add(foodKey); } else expandedFoods.delete(foodKey);
+      };
+      const toggle = () => setOpen(detail.hidden);
+      arrow.addEventListener('click', toggle);
+      nameSpan.addEventListener('click', toggle);
+      nameSpan.setAttribute('role', 'button');
+      left.append(arrow, nameSpan);
 
       const qtyInput = document.createElement('input'); qtyInput.className='qty-input';
       qtyInput.type = 'number'; qtyInput.min = 1; qtyInput.value = entry.quantity;
@@ -810,6 +837,7 @@ function renderMeals(){
         mealsDB[date][mealName][idx].quantity = v;
         saveMealsDB();
         statsEl.innerHTML = fmtMacrosHtml(sumMacros(mealsDB[date][mealName]), true);
+        if(!detail.hidden) fillDetail();
         renderTotalsAndChart();
       });
       left.appendChild(qtyInput);
@@ -821,13 +849,16 @@ function renderMeals(){
 
       const del = document.createElement('button'); del.className='tiny-btn'; del.style='background-color: #5a1a1a'; del.textContent='✕';
       del.addEventListener('click', ()=>{
+        [...expandedFoods].forEach(k => { if(k.startsWith(`${date}|${mealName}|`)) expandedFoods.delete(k); });   // indexes shift
         mealsDB[date][mealName].splice(idx,1);
         saveMealsDB();
         renderAll();
       });
       row.appendChild(del);
 
-      box.appendChild(row);
+      setOpen(expandedFoods.has(foodKey));
+      item.append(row, detail);
+      box.appendChild(item);
     });
 
     // Add-food single-row (search wrapper + qty + add)
