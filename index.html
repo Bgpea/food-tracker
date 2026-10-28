@@ -324,6 +324,20 @@
   .food-detail[hidden]{ display:none; }
   .food-detail span{ white-space:nowrap; }
 
+
+  /* ===== Barcode scanner ===== */
+  .scan-overlay{ position:fixed; inset:0; z-index:500; background:#000; }
+  .scan-video{ position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  .scan-frame{ position:absolute; left:10%; right:10%; top:22%; height:26%; border:2px solid rgba(255,255,255,.9); border-radius:12px; box-shadow:0 0 0 9999px rgba(0,0,0,.45); pointer-events:none; }
+  .scan-panel{ position:absolute; left:0; right:0; bottom:0; padding:12px 14px calc(14px + env(safe-area-inset-bottom, 0px)); background:rgba(0,0,0,.78); display:flex; flex-direction:column; gap:8px; }
+  .scan-msg{ color:#fff; font-size:14px; text-align:center; }
+  .scan-manual{ display:flex; gap:6px; }
+  .scan-manual input{ flex:1; min-width:0; }
+  .scan-cancel{ width:100%; }
+  .toast{ position:fixed; left:50%; bottom:calc(24px + env(safe-area-inset-bottom, 0px)); transform:translateX(-50%); background:#222; color:#fff; border:1px solid #444; border-radius:10px; padding:10px 14px; font-size:13px; z-index:600; max-width:88%; text-align:center; }
+  .scan-modal-btn{ width:100%; display:flex; align-items:center; justify-content:center; gap:8px; margin-bottom:8px; background:#1d4f7c; }
+  .scan-modal-btn svg{ width:18px; height:18px; }
+
   @media (max-width:420px){
     .container{ width:94%; }
     .db-row input{ width:100%; }
@@ -496,6 +510,9 @@
         <button onclick="pickFile('dbFile')">Import</button>
       </div>
       <input id="dbFile" type="file" accept=".json,application/json" hidden onchange="importDBFile(this)">
+
+      <h3 class="set-h">Barcode scanner</h3>
+      <p class="hint">Product data comes from Open Food Facts (openfoodfacts.org), available under the Open Database Licence. It is entered by volunteers, so check the values.</p>
     </section>
 
   </div>
@@ -676,6 +693,7 @@ function deltaHtml(kind, logged, target, unit){
 }
 
 const SAVE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>';   // floppy-disk icon used by the small Save buttons
+const SCAN_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="8" x2="7" y2="16"/><line x1="10.5" y1="8" x2="10.5" y2="16"/><line x1="14" y1="8" x2="14" y2="16"/><line x1="17" y1="8" x2="17" y2="16"/></svg>';   // barcode-scan icon
 const PLUS_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';   // plus icon for the small Add buttons
 const SEP = '<span class="sep"></span>';          // gap between values (HTML)
 const SEP_TXT = '\u2002\u2002';                   // gap between values (plain text)
@@ -881,6 +899,11 @@ function renderMeals(){
 
     addRow.appendChild(wrapper);
 
+    const scanBtn = document.createElement('button'); scanBtn.className = 'tiny-btn'; scanBtn.innerHTML = SCAN_ICON;
+    scanBtn.style.background = '#333'; scanBtn.title = 'Scan barcode'; scanBtn.setAttribute('aria-label', 'Scan barcode');
+    scanBtn.addEventListener('click', () => scanIntoSearch(searchInput, resultsDiv, qty));
+    addRow.appendChild(scanBtn);
+
     const qty = document.createElement('input'); qty.type='number'; qty.placeholder='g'; qty.className='qty-sm'; qty.id = `qty_${idSafe}`;
     addRow.appendChild(qty);
 
@@ -963,9 +986,188 @@ function foodSuggest(inputEl, resultsDiv, qtyEl){
   resultsDiv.style.display = resultsDiv.children.length ? 'block' : 'none';
 }
 
-/* Window box with the fields needed to add a new food to the database */
-function openAddFoodModal(prefillName, onSaved){
+/* =====================================================================
+   BARCODE SCANNER
+   Camera -> barcode number -> your own database first, then Open Food Facts (free, open data, per 100 g)
+   ===================================================================== */
+let toastEl = null, toastTimer = null;
+function toast(msg, ms){
+  hideToast();
+  toastEl = document.createElement('div'); toastEl.className = 'toast'; toastEl.textContent = msg;
+  document.body.appendChild(toastEl);
+  if(ms) toastTimer = setTimeout(hideToast, ms);
+}
+function hideToast(){ clearTimeout(toastTimer); if(toastEl){ toastEl.remove(); toastEl = null; } }
+
+const normCode = c => String(c || '').replace(/\D/g, '').replace(/^0+/, '');    // EAN-13 / UPC-A differ only by a leading zero
+function findFoodByBarcode(code){ return foodDB.find(f => f.barcode && normCode(f.barcode) === normCode(code)); }
+
+function loadScriptOnce(src){
+  return new Promise((resolve, reject) => {
+    if(window.ZXing) return resolve();
+    const el = document.createElement('script');
+    el.src = src; el.onload = resolve; el.onerror = () => reject(new Error('script failed'));
+    document.head.appendChild(el);
+  });
+}
+
+/* Full-screen camera view. Resolves with the barcode digits, or null if cancelled. The number can also be typed. */
+function scanBarcode(){
+  return new Promise(resolve => {
+    const ov = document.createElement('div'); ov.className = 'scan-overlay';
+    ov.innerHTML = `
+      <video class="scan-video" playsinline muted autoplay></video>
+      <div class="scan-frame"></div>
+      <div class="scan-panel">
+        <div class="scan-msg">Point the camera at the barcode</div>
+        <div class="scan-manual">
+          <input class="scan-code" inputmode="numeric" placeholder="or type the barcode number" autocomplete="off">
+          <button class="scan-go" style="background:#174611">Look up</button>
+        </div>
+        <button class="scan-cancel">Cancel</button>
+      </div>`;
+    document.body.appendChild(ov);
+    const video = ov.querySelector('video'), msg = ov.querySelector('.scan-msg'), codeIn = ov.querySelector('.scan-code');
+    let stream = null, done = false, timer = null, zreader = null;
+
+    const finish = code => {
+      if(done) return;
+      done = true; clearTimeout(timer);
+      try{ if(zreader) zreader.reset(); }catch(e){}
+      if(stream) stream.getTracks().forEach(t => t.stop());
+      ov.remove();
+      resolve(code || null);
+    };
+    const submit = () => {
+      const c = codeIn.value.replace(/\D/g, '');
+      if(c.length < 6){ msg.textContent = 'Type the full number printed under the barcode'; return; }
+      finish(c);
+    };
+    ov.querySelector('.scan-cancel').addEventListener('click', () => finish(null));
+    ov.querySelector('.scan-go').addEventListener('click', submit);
+    codeIn.addEventListener('keydown', e => { if(e.key === 'Enter') submit(); else if(e.key === 'Escape') finish(null); });
+
+    (async () => {
+      if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+        msg.textContent = 'The camera is not available here. Type the barcode number below.'; return;
+      }
+      try{
+        stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:'environment' } }, audio:false });
+      }catch(e){
+        msg.textContent = 'Camera access was refused. Type the barcode number below.'; return;
+      }
+      if(done){ stream.getTracks().forEach(t => t.stop()); return; }
+      video.srcObject = stream;
+      try{ await video.play(); }catch(e){}
+
+      // 1) the browser's own detector (Chrome on Android)
+      if('BarcodeDetector' in window){
+        let det = null;
+        try{
+          const want = ['ean_13','ean_8','upc_a','upc_e','code_128'];
+          const sup = await BarcodeDetector.getSupportedFormats();
+          det = new BarcodeDetector({ formats: want.filter(f => sup.includes(f)) });
+        }catch(e){ det = null; }
+        if(det){
+          const tick = async () => {
+            if(done) return;
+            try{ const r = await det.detect(video); if(r.length && r[0].rawValue){ finish(r[0].rawValue); return; } }catch(e){}
+            timer = setTimeout(tick, 150);
+          };
+          tick();
+          return;
+        }
+      }
+      // 2) fallback: ZXing, loaded from a CDN only when needed
+      try{
+        await loadScriptOnce('https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js');
+        const hints = new Map();
+        hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8, ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.UPC_E, ZXing.BarcodeFormat.CODE_128]);
+        zreader = new ZXing.BrowserMultiFormatReader(hints, 300);
+        zreader.decodeFromStream(stream, video, res => { if(res) finish(res.getText()); });
+      }catch(e){
+        msg.textContent = 'Automatic scanning is not supported on this device. Type the barcode number below.';
+      }
+    })();
+  });
+}
+
+/* Open Food Facts lookup. Resolves {found:false} or {found:true, name, calories, protein, carbs, fat, fibers}; rejects on network errors. */
+async function lookupBarcode(code){
+  const url = `https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json?fields=code,product_name,product_name_en,brands,nutriments`;
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 12000);
+  try{
+    const r = await fetch(url, { signal: ctl.signal });
+    if(!r.ok) throw new Error('http ' + r.status);
+    const j = await r.json();
+    if(j.status !== 1 || !j.product) return { found:false };
+    const p = j.product, n = p.nutriments || {};
+    let kcal = n['energy-kcal_100g'];
+    if(kcal == null && n['energy_100g'] != null) kcal = n['energy_100g'] / 4.184;       // kJ -> kcal
+    const num = v => (v == null || isNaN(+v)) ? 0 : Math.round(+v * 10) / 10;
+    const out = {
+      found:true,
+      name: (p.product_name || p.product_name_en || '').trim(),
+      calories: Math.round(+kcal || 0),
+      protein: num(n.proteins_100g), carbs: num(n.carbohydrates_100g), fat: num(n.fat_100g), fibers: num(n.fiber_100g)
+    };
+    out.incomplete = (kcal == null) || n.proteins_100g == null || n.carbohydrates_100g == null || n.fat_100g == null;
+    return out;
+  } finally { clearTimeout(t); }
+}
+
+/* scan, then: own database -> {code, local}; otherwise online -> {code, online} or {code, error} */
+async function scanForFood(){
+  const code = await scanBarcode();
+  if(!code) return null;
+  const local = findFoodByBarcode(code);
+  if(local) return { code, local };
+  toast('Looking up the product…');
+  try{ const online = await lookupBarcode(code); hideToast(); return { code, online }; }
+  catch(e){ hideToast(); return { code, error:true }; }
+}
+
+/* what the Add Food box should be pre-filled with after a scan */
+function prefillFromScan(res){
+  const pf = { barcode: res.code, name:'', note:'' };
+  if(res.online && res.online.found){
+    Object.assign(pf, res.online);
+    pf.note = (pf.name ? `Found “${pf.name}”. ` : 'Product found, but it has no name. ') +
+              'Values are per 100 g from Open Food Facts, please check them.' + (res.online.incomplete ? ' Some values were missing.' : '');
+  }else if(res.error){
+    pf.note = 'Could not reach the product database. Enter the values by hand; the barcode is saved with the food.';
+  }else{
+    pf.note = 'This barcode is not in Open Food Facts. Enter the values by hand; the barcode is saved with the food.';
+  }
+  return pf;
+}
+
+/* scan button next to a food search box (Diary and My Meals) */
+async function scanIntoSearch(inputEl, resultsDiv, qtyEl){
+  const res = await scanForFood();
+  if(!res) return;
+  const use = food => {
+    inputEl.value = food.name;
+    resultsDiv.innerHTML = ''; resultsDiv.style.display = 'none';
+    if(qtyEl) qtyEl.focus();
+  };
+  if(res.local){ use(res.local); toast('Found in your database: ' + res.local.name, 1800); return; }
+  openAddFoodModal(prefillFromScan(res), use);
+}
+
+/* Window box with the fields needed to add a new food to the database.
+   prefill: a name (string) or {name, calories, ..., barcode, note, found} */
+function openAddFoodModal(prefill, onSaved){
+  const pf = typeof prefill === 'string' ? { name:prefill } : (prefill || {});
+  let barcode = pf.barcode || '';
   const wrap = document.createElement('div');
+
+  const scanBtn = document.createElement('button'); scanBtn.type = 'button'; scanBtn.className = 'scan-modal-btn';
+  scanBtn.innerHTML = `${SCAN_ICON}<span>Scan barcode</span>`;
+  const note = document.createElement('div'); note.className = 'hint'; note.style.margin = '0 0 8px'; note.textContent = pf.note || '';
+  wrap.append(scanBtn, note);
+
   const fields = [
     ['name','Name'], ['calories','Calories / 100g'], ['protein','Protein / 100g'], ['carbs','Carbs / 100g'],
     ['fat','Fat / 100g'], ['fibers','Fibers / 100g'], ['cost','Cost / kg (€)'], ['ammino','Ammino (-1, 0, 1)']
@@ -974,7 +1176,7 @@ function openAddFoodModal(prefillName, onSaved){
   fields.forEach(([key, label]) => {
     if(key === 'name'){            // full-width box; "Name" is only a placeholder, hidden as soon as you type
       const inp = document.createElement('input');
-      inp.type = 'text'; inp.placeholder = 'Name'; inp.value = prefillName || ''; inp.autocomplete = 'off';
+      inp.type = 'text'; inp.placeholder = 'Name'; inp.value = pf.name || ''; inp.autocomplete = 'off';
       inp.style.cssText = 'width:100%; margin-bottom:10px;';
       inputs.name = inp; wrap.appendChild(inp);
       return;
@@ -983,23 +1185,39 @@ function openAddFoodModal(prefillName, onSaved){
     const sp = document.createElement('span'); sp.textContent = label;
     const inp = document.createElement('input');
     inp.type = 'number'; inp.step = 'any'; inp.inputMode = 'decimal'; inp.placeholder = '0';
+    if(pf.found && pf[key] != null) inp.value = pf[key];
     inputs[key] = inp; row.append(sp, inp); wrap.appendChild(row);
   });
+
+  scanBtn.addEventListener('click', async () => {
+    const res = await scanForFood();
+    if(!res) return;
+    if(res.local){ note.textContent = `Already in your database as “${res.local.name}”.`; return; }
+    const p = prefillFromScan(res);
+    barcode = p.barcode;
+    note.textContent = p.note;
+    if(p.name) inputs.name.value = p.name;
+    if(p.found) ['calories','protein','carbs','fat','fibers'].forEach(k => { inputs[k].value = p[k]; });
+    (p.found ? inputs.cost : inputs.calories).focus();
+  });
+
   openModal('Add food', wrap, [
     { text:'Cancel' },
     { text:'Save', bg:'#174611', onClick: () => {
       const name = inputs.name.value.trim();
       if(!name){ alert('Enter a name'); return false; }
       if(foodDB.some(f => f.name.toLowerCase() === name.toLowerCase())){ alert('A food with this name already exists'); return false; }
+      if(barcode && findFoodByBarcode(barcode)){ alert('A food with this barcode already exists'); return false; }
       const food = { name };
       ['calories','protein','carbs','fat','fibers','cost','ammino'].forEach(k => { food[k] = parseFloat(inputs[k].value) || 0; });
+      if(barcode) food.barcode = barcode;
       foodDB.push(food);
       saveFoodDB();
       dbSearch();
       if(onSaved) onSaved(food);
     }}
   ]);
-  (prefillName ? inputs.calories : inputs.name).focus();
+  (pf.found ? inputs.cost : (pf.name ? inputs.calories : inputs.name)).focus();
 }
 
 /* ===== Totals & chart (includes calories and ammino logic) ===== */
@@ -1127,6 +1345,7 @@ function showSavedMealDetail(idx){
   const isNew = (idx === 'new');
   const meal = isNew ? { name:'', foods:[] } : savedMealsDB[idx];
   editingMeal = { idx: isNew ? null : idx, draft: JSON.parse(JSON.stringify(meal.foods)) };
+  draftOpen = new Set();
   byId('savedMealsTitle').textContent = isNew ? 'New Meal' : 'Edit Meal';
   byId('savedMealsListView').hidden = true;
   const view = byId('savedMealDetailView');
@@ -1149,6 +1368,7 @@ function showSavedMealDetail(idx){
         <input id="smSearch" placeholder="Search food..." autocomplete="off" style="width:100%">
         <div id="smResults" class="search-results" style="display:none"></div>
       </div>
+      <button id="smScan" class="tiny-btn" style="background:#333" title="Scan barcode" aria-label="Scan barcode">${SCAN_ICON}</button>
       <input id="smQty" type="number" placeholder="g" class="qty-sm">
       <button id="smAdd" class="tiny-btn" style="background:#174611" title="Add food" aria-label="Add food">${PLUS_ICON}</button>
     </div>
@@ -1161,6 +1381,7 @@ function showSavedMealDetail(idx){
   si.addEventListener('input', () => foodSuggest(si, sr, sq));
   si.addEventListener('focus', () => foodSuggest(si, sr, sq));
   byId('smAdd').addEventListener('click', addFoodToDraft);
+  byId('smScan').addEventListener('click', () => scanIntoSearch(si, sr, sq));
   renderDraftFoods();
   updateDraftStats();
   if(isNew) byId('savedMealNameInput').focus();
@@ -1191,38 +1412,65 @@ function updateDraftStats(){
   byId('sm_cost').textContent = t.cost.toFixed(2);
 }
 
+let draftOpen = new Set();   // positions of the foods whose details are open in the My Meals editor
+
 function renderDraftFoods(){
   const wrap = byId('savedMealFoods');
   wrap.innerHTML = '';
   const draft = editingMeal.draft;
   if(draft.length === 0){
+    draftOpen.clear();
     wrap.innerHTML = '<div class="hint">No foods yet. Search below to add one, or save it without foods as a default meal.</div>';
     return;
   }
   draft.forEach((food, i) => {
+    const item = document.createElement('div'); item.className = 'food-item';
     const row = document.createElement('div'); row.className = 'food-row';
     const left = document.createElement('div'); left.className = 'food-left';
 
-    const name = document.createElement('input'); name.className = 'saved-food-name'; name.value = food.name;
-    name.addEventListener('change', () => {
-      const dbFood = foodDB.find(f => f.name.toLowerCase() === name.value.trim().toLowerCase());
-      if(dbFood) draft[i] = foodEntry(dbFood, draft[i].quantity);
-      name.value = draft[i].name;           // unknown names go back to the previous food
-      updateDraftStats();
-    });
+    // ► / ▼ + name: tap to show or hide calories, macros, cost and fibers of this food
+    const arrow = document.createElement('span'); arrow.className = 'food-arrow';
+    const nameSpan = document.createElement('span'); nameSpan.className = 'food-name'; nameSpan.textContent = food.name;
+    nameSpan.setAttribute('role', 'button');
+    const detail = document.createElement('div'); detail.className = 'food-detail';
+    const fillDetail = () => { detail.innerHTML = fmtMacrosHtml(sumMacros([draft[i]]), true); };
+    const setOpen = open => {
+      arrow.textContent = open ? '▼' : '►';
+      nameSpan.setAttribute('aria-expanded', open ? 'true' : 'false');
+      detail.hidden = !open;
+      if(open){ fillDetail(); draftOpen.add(i); } else draftOpen.delete(i);
+    };
+    const toggle = () => setOpen(detail.hidden);
+    arrow.addEventListener('click', toggle);
+    nameSpan.addEventListener('click', toggle);
+    left.append(arrow, nameSpan);
 
     const qty = document.createElement('input'); qty.type = 'number'; qty.min = 1; qty.className = 'qty-input';
     qty.inputMode = 'decimal'; qty.value = food.quantity;
-    qty.addEventListener('input', () => { draft[i].quantity = +qty.value || 0; updateDraftStats(); });
+    qty.addEventListener('input', () => {
+      draft[i].quantity = +qty.value || 0;
+      updateDraftStats();
+      if(!detail.hidden) fillDetail();
+    });
+    left.appendChild(qty);
 
     const unit = document.createElement('span'); unit.textContent = 'g';
+    left.appendChild(unit);
 
     const del = document.createElement('button'); del.className = 'tiny-btn'; del.style.background = '#5a1a1a'; del.textContent = '✕';
-    del.addEventListener('click', () => { draft.splice(i, 1); renderDraftFoods(); updateDraftStats(); });
+    del.addEventListener('click', () => {
+      const next = new Set();                                   // keep the right foods open after the positions shift
+      draftOpen.forEach(k => { if(k < i) next.add(k); else if(k > i) next.add(k - 1); });
+      draftOpen = next;
+      draft.splice(i, 1);
+      renderDraftFoods();
+      updateDraftStats();
+    });
 
-    left.append(name, qty, unit);
     row.append(left, del);
-    wrap.appendChild(row);
+    setOpen(draftOpen.has(i));
+    item.append(row, detail);
+    wrap.appendChild(item);
   });
 }
 
@@ -1290,6 +1538,10 @@ function dbSearch(){
     nameInput.id = `edit_name_${safeId(food.name)}`; nameInput.placeholder = 'Name'; nameInput.value = food.name;
     nameInput.style.gridColumn = '1 / -1';
     rows.appendChild(nameInput);
+    const bcInput = document.createElement('input');          // optional, lets the scanner recognise this food
+    bcInput.id = `edit_barcode_${safeId(food.name)}`; bcInput.placeholder = 'Barcode (optional)'; bcInput.inputMode = 'numeric';
+    bcInput.value = food.barcode || ''; bcInput.style.gridColumn = '1 / -1';
+    rows.appendChild(bcInput);
 
     const props = [['calories','Calories'],['protein','Protein'],['carbs','Carbs'],['fat','Fat'],['fibers','Fibers'],['cost','Cost'],['ammino','Ammino']];
     props.forEach(p => {
@@ -1329,7 +1581,10 @@ function saveDbEdits(originalName){
 
   const idx = foodDB.findIndex(x=>x.name===originalName);
   if(idx === -1) return alert('Food not found');
+  const barcode = (document.getElementById(`edit_barcode_${id}`).value || '').replace(/\D/g, '');
+  if(barcode && foodDB.some((f, i) => i !== idx && f.barcode && normCode(f.barcode) === normCode(barcode))) return alert('Another food already has this barcode');
   foodDB[idx] = { name: newName, calories, protein, carbs, fat, fibers, cost, ammino };
+  if(barcode) foodDB[idx].barcode = barcode;
   saveFoodDB();
   dbSearch();
   renderAll();
@@ -1363,7 +1618,8 @@ function readJsonFile(input, cb){
 /* ----- cleaning of imported data ----- */
 function cleanFood(f){
   return { name:String(f.name), calories:+f.calories||0, protein:+f.protein||0, carbs:+f.carbs||0,
-           fat:+f.fat||0, fibers:+f.fibers||0, cost:+f.cost||0, ammino:+f.ammino||0 };
+           fat:+f.fat||0, fibers:+f.fibers||0, cost:+f.cost||0, ammino:+f.ammino||0,
+           ...(f.barcode ? { barcode:String(f.barcode).replace(/\D/g, '') } : {}) };
 }
 function cleanEntry(f){ return { ...cleanFood(f), quantity:+f.quantity||0 }; }
 function validFood(f){ return f && typeof f.name === 'string' && f.name.trim() !== ''; }
